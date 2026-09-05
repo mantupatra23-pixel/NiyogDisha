@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.admin import router as admin_router
@@ -6,6 +7,16 @@ from app.api.v1.exams import router as exam_router
 from app.api.v1.jobs import router as job_router
 from app.api.v1.sources import router as sources_router
 from app.core.config import settings
+from app.core.database import Base, engine
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Auto-create tables if not present
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -13,6 +24,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -23,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Route Registry
+# Routes
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(job_router, prefix=settings.API_V1_STR)
 app.include_router(exam_router, prefix=settings.API_V1_STR)
