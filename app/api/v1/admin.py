@@ -7,12 +7,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.models import (
+    AdmitCard,
+    AnswerKey,
     AuditLog,
+    ExamLifecycleStatus,
     Job,
     JobAgeLimit,
     JobCategory,
     JobFee,
     JobLink,
+    JobResult,
     JobStatus,
     JobVacancy,
     LinkType,
@@ -154,21 +158,21 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     now = datetime.now(timezone.utc)
     future_date = now + timedelta(days=30)
 
-    # 1. State check/create
+    # 1. State
     state_res = await db.execute(select(State).where(State.code == "AI"))
     ai_state = state_res.scalar_one_or_none()
     if not ai_state:
         ai_state = State(name="All India / Central", code="AI", slug="all-india")
         db.add(ai_state)
 
-    # 2. Category check/create
+    # 2. Category
     cat_res = await db.execute(select(JobCategory).where(JobCategory.slug == "ssc"))
     ssc_cat = cat_res.scalar_one_or_none()
     if not ssc_cat:
         ssc_cat = JobCategory(name="SSC", slug="ssc", description="Staff Selection Commission")
         db.add(ssc_cat)
 
-    # 3. Organization check/create
+    # 3. Organization
     ssc_res = await db.execute(select(Organization).where(Organization.short_name == "SSC"))
     ssc_org = ssc_res.scalar_one_or_none()
     if not ssc_org:
@@ -181,21 +185,9 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         )
         db.add(ssc_org)
 
-    upsc_res = await db.execute(select(Organization).where(Organization.short_name == "UPSC"))
-    upsc_org = upsc_res.scalar_one_or_none()
-    if not upsc_org:
-        upsc_org = Organization(
-            name="Union Public Service Commission",
-            short_name="UPSC",
-            slug="upsc",
-            official_website="https://upsc.gov.in",
-            org_type="CENTRAL",
-        )
-        db.add(upsc_org)
-
     await db.flush()
 
-    # 4. SSC CGL Live Published Job
+    # 4. SSC CGL Job
     job_slug = f"ssc-cgl-2026-{uuid.uuid4().hex[:6]}"
     cgl_job = Job(
         organization_id=ssc_org.id,
@@ -205,7 +197,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         short_title="SSC CGL 2026",
         slug=job_slug,
         advertisement_number=f"HQ-C1201/{uuid.uuid4().hex[:4].upper()}",
-        description="Staff Selection Commission invites online applications for Group B and Group C posts across Central Ministries.",
+        description="Staff Selection Commission invites online applications for Group B and Group C posts.",
         status=JobStatus.PUBLISHED,
         employment_type="PERMANENT",
         job_type="CENTRAL",
@@ -213,13 +205,13 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         total_vacancies=14582,
         published_at=now,
         last_date=future_date,
-        seo_title="SSC CGL 2026 Notification & Online Form",
-        seo_description="Apply online for 14582 vacancies in SSC CGL 2026.",
+        seo_title="SSC CGL 2026 Notification & Apply Online",
+        seo_description="Apply online for SSC CGL 2026.",
     )
     db.add(cgl_job)
     await db.flush()
 
-    # 5. Nested Links, Vacancies, Fees, Age Limit
+    # 5. Nested Job Details
     link1 = JobLink(
         job_id=cgl_job.id,
         title="Official Notification PDF",
@@ -227,32 +219,39 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         link_type=LinkType.NOTIFICATION,
         is_official=True,
     )
-    link2 = JobLink(
-        job_id=cgl_job.id,
-        title="Apply Online Portal",
-        url="https://ssc.gov.in/apply",
-        link_type=LinkType.APPLY_ONLINE,
-        is_official=True,
-    )
     vac1 = JobVacancy(job_id=cgl_job.id, post_name="Assistant Section Officer", category="UR", count=750)
-    vac2 = JobVacancy(job_id=cgl_job.id, post_name="Income Tax Inspector", category="OBC", count=420)
-    fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI / Net Banking")
-    fee2 = JobFee(job_id=cgl_job.id, category="SC / ST / Female", amount=0.0, payment_mode="Exempted")
-    age = JobAgeLimit(
+    fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI")
+    age = JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now)
+
+    # 6. Exam Lifecycle: Admit Card, Answer Key, Result
+    admit_card = AdmitCard(
         job_id=cgl_job.id,
-        min_age=18,
-        max_age=30,
-        as_on_date=now,
-        relaxation_summary="OBC: 3 Years, SC/ST: 5 Years",
+        title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
+        release_date=now + timedelta(days=20),
+        download_url="https://ssc.gov.in/admitcard/cgl2026",
+        status=ExamLifecycleStatus.UPCOMING,
+    )
+    answer_key = AnswerKey(
+        job_id=cgl_job.id,
+        title="SSC CGL 2025 Tier-2 Official Answer Key with Response Sheet",
+        release_date=now,
+        download_url="https://ssc.gov.in/answerkeys/cgl2025-tier2.pdf",
+        objection_last_date=now + timedelta(days=5),
+        status=ExamLifecycleStatus.ACTIVE,
+    )
+    result = JobResult(
+        job_id=cgl_job.id,
+        title="SSC CGL 2025 Tier-1 Final Result & Cut-off Marks",
+        release_date=now,
+        result_url="https://ssc.gov.in/results/cgl2025-tier1-list.pdf",
+        status=ExamLifecycleStatus.ACTIVE,
     )
 
-    db.add_all([link1, link2, vac1, vac2, fee1, fee2, age])
+    db.add_all([link1, vac1, fee1, age, admit_card, answer_key, result])
     await db.commit()
 
     return {
         "success": True,
-        "message": "Master data and live PUBLISHED SSC CGL 2026 job created successfully!",
-        "organization_id": str(ssc_org.id),
-        "job_id": str(cgl_job.id),
+        "message": "Master data, SSC CGL Job, Admit Card, Answer Key, and Result seeded successfully!",
         "job_slug": job_slug,
     }
