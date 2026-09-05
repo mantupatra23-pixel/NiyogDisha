@@ -20,7 +20,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
-# Enums
+# ==========================================
+# ENUMS
+# ==========================================
+
 class JobStatus(str, enum.Enum):
     DRAFT = "DRAFT"
     PENDING_REVIEW = "PENDING_REVIEW"
@@ -52,7 +55,10 @@ class LinkType(str, enum.Enum):
     SYLLABUS = "SYLLABUS"
 
 
-# RBAC Models
+# ==========================================
+# ASSOCIATION TABLES (M2M)
+# ==========================================
+
 user_roles = Table(
     "user_roles",
     Base.metadata,
@@ -60,6 +66,17 @@ user_roles = Table(
     Column("role_id", UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True),
 )
 
+job_qualifications = Table(
+    "job_qualifications",
+    Base.metadata,
+    Column("job_id", UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("qualification_id", Integer, ForeignKey("qualifications.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
+# ==========================================
+# AUTHENTICATION & RBAC
+# ==========================================
 
 class User(Base):
     __tablename__ = "users"
@@ -74,6 +91,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     roles: Mapped[List["Role"]] = relationship("Role", secondary=user_roles, lazy="selectin")
+    audit_logs: Mapped[List["AuditLog"]] = relationship("AuditLog", back_populates="user")
 
 
 class Role(Base):
@@ -84,16 +102,20 @@ class Role(Base):
     description: Mapped[Optional[str]] = mapped_column(String(255))
 
 
-# Geographic & Organization Models
+# ==========================================
+# GEOGRAPHIC, ORG & TAXONOMY
+# ==========================================
+
 class State(Base):
     __tablename__ = "states"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    code: Mapped[str] = mapped_column(String(5), unique=True, nullable=False)  # OD, BR, DL, ALL_INDIA
+    code: Mapped[str] = mapped_column(String(10), unique=True, nullable=False)  # OD, BR, DL, ALL_INDIA
     slug: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
 
     districts: Mapped[List["District"]] = relationship("District", back_populates="state", cascade="all, delete-orphan")
+    jobs: Mapped[List["Job"]] = relationship("Job", back_populates="state")
 
 
 class District(Base):
@@ -119,19 +141,44 @@ class Organization(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     jobs: Mapped[List["Job"]] = relationship("Job", back_populates="organization")
+    sources: Mapped[List["OfficialSource"]] = relationship("OfficialSource", back_populates="organization")
 
 
-# Official Source Registry
+class JobCategory(Base):
+    __tablename__ = "job_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)  # UPSC, SSC, RAILWAY, BANKING
+    slug: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(String(255))
+
+    jobs: Mapped[List["Job"]] = relationship("Job", back_populates="category")
+
+
+class Qualification(Base):
+    __tablename__ = "qualifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)  # 10th, 12th, Graduate, B.Tech
+    slug: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+
+    jobs: Mapped[List["Job"]] = relationship("Job", secondary=job_qualifications, back_populates="qualifications")
+
+
+# ==========================================
+# SOURCE REGISTRY
+# ==========================================
+
 class OfficialSource(Base):
     __tablename__ = "official_sources"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"))
+    organization_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"))
     source_name: Mapped[str] = mapped_column(String(200), nullable=False)
     source_type: Mapped[SourceType] = mapped_column(Enum(SourceType), nullable=False)
-    official_domain: Mapped[str] = mapped_column(String(255), nullable=False)  # e.g., upsc.gov.in, ssc.gov.in
+    official_domain: Mapped[str] = mapped_column(String(255), nullable=False)
     notification_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    parser_type: Mapped[str] = mapped_column(String(50), nullable=False)  # upsc, ssc, html_table, etc.
+    parser_type: Mapped[str] = mapped_column(String(50), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     check_frequency_minutes: Mapped[int] = mapped_column(Integer, default=60)
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -139,22 +186,30 @@ class OfficialSource(Base):
     last_failure_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    organization: Mapped[Optional["Organization"]] = relationship("Organization", back_populates="sources")
 
-# Core Job & Exam Lifecycle
+
+# ==========================================
+# CORE JOB MODEL & DETAILS
+# ==========================================
+
 class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     organization_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False)
+    category_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("job_categories.id", ondelete="SET NULL"))
+    state_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("states.id", ondelete="SET NULL"))
+
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     short_title: Mapped[str] = mapped_column(String(150), nullable=False)
     advertisement_number: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.DRAFT, index=True, nullable=False)
     employment_type: Mapped[str] = mapped_column(String(50), default="PERMANENT")
-    job_type: Mapped[str] = mapped_column(String(50), default="CENTRAL")  # CENTRAL, STATE
-    application_mode: Mapped[str] = mapped_column(String(20), default="ONLINE")  # ONLINE, OFFLINE
+    job_type: Mapped[str] = mapped_column(String(50), default="CENTRAL")
+    application_mode: Mapped[str] = mapped_column(String(20), default="ONLINE")
     total_vacancies: Mapped[int] = mapped_column(Integer, default=0)
 
     # Dates
@@ -163,17 +218,21 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # SEO fields
+    # SEO metadata
     seo_title: Mapped[Optional[str]] = mapped_column(String(200))
     seo_description: Mapped[Optional[str]] = mapped_column(String(300))
     canonical_url: Mapped[Optional[str]] = mapped_column(String(500))
 
     # Relationships
     organization: Mapped["Organization"] = relationship("Organization", back_populates="jobs")
+    category: Mapped[Optional["JobCategory"]] = relationship("JobCategory", back_populates="jobs")
+    state: Mapped[Optional["State"]] = relationship("State", back_populates="jobs")
+    qualifications: Mapped[List["Qualification"]] = relationship("Qualification", secondary=job_qualifications, back_populates="jobs")
     links: Mapped[List["JobLink"]] = relationship("JobLink", back_populates="job", cascade="all, delete-orphan")
     vacancies: Mapped[List["JobVacancy"]] = relationship("JobVacancy", back_populates="job", cascade="all, delete-orphan")
     fees: Mapped[List["JobFee"]] = relationship("JobFee", back_populates="job", cascade="all, delete-orphan")
     age_limit: Mapped[Optional["JobAgeLimit"]] = relationship("JobAgeLimit", back_populates="job", uselist=False, cascade="all, delete-orphan")
+    exams: Mapped[List["Exam"]] = relationship("Exam", back_populates="job")
 
 
 class JobLink(Base):
@@ -195,7 +254,7 @@ class JobVacancy(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
     post_name: Mapped[str] = mapped_column(String(150), nullable=False)
-    category: Mapped[str] = mapped_column(String(50), nullable=False)  # UR, OBC, EWS, SC, ST
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     job: Mapped["Job"] = relationship("Job", back_populates="vacancies")
@@ -219,20 +278,90 @@ class JobFee(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False)
-    category: Mapped[str] = mapped_column(String(50), nullable=False)  # General/OBC, SC/ST, Female
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False, default=0.0)
     payment_mode: Mapped[str] = mapped_column(String(100), default="Online Net Banking / Debit Card / UPI")
 
     job: Mapped["Job"] = relationship("Job", back_populates="fees")
 
 
+# ==========================================
+# EXAM LIFECYCLE (RECRUITMENT -> EXAM -> ADMIT -> KEY -> RESULT)
+# ==========================================
+
+class Exam(Base):
+    __tablename__ = "exams"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("jobs.id", ondelete="SET NULL"))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    exam_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    admit_card_release_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    result_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped[Optional["Job"]] = relationship("Job", back_populates="exams")
+    admit_card: Mapped[Optional["AdmitCard"]] = relationship("AdmitCard", back_populates="exam", uselist=False, cascade="all, delete-orphan")
+    answer_key: Mapped[Optional["AnswerKey"]] = relationship("AnswerKey", back_populates="exam", uselist=False, cascade="all, delete-orphan")
+    result: Mapped[Optional["Result"]] = relationship("Result", back_populates="exam", uselist=False, cascade="all, delete-orphan")
+
+
+class AdmitCard(Base):
+    __tablename__ = "admit_cards"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exam_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    download_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    release_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    exam: Mapped["Exam"] = relationship("Exam", back_populates="admit_card")
+
+
+class AnswerKey(Base):
+    __tablename__ = "answer_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exam_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    download_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    objection_last_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    release_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    exam: Mapped["Exam"] = relationship("Exam", back_populates="answer_key")
+
+
+class Result(Base):
+    __tablename__ = "results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exam_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("exams.id", ondelete="CASCADE"), unique=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    result_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    cutoff_details: Mapped[Optional[Text]] = mapped_column(Text)
+    declared_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    exam: Mapped["Exam"] = relationship("Exam", back_populates="result")
+
+
+# ==========================================
+# SYSTEM AUDIT LOGGING
+# ==========================================
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    action: Mapped[str] = mapped_column(String(100), nullable=False)  # APPROVE, REJECT, PUBLISH, UPDATE
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)  # JOB, SOURCE, EXAM
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"))
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(100), nullable=False)
     details: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="audit_logs")

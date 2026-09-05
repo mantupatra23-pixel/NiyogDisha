@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.auth import router as auth_router
+from app.api.v1.exams import router as exam_router
+from app.api.v1.jobs import router as job_router
 from app.core.config import settings
 
 app = FastAPI(
@@ -11,7 +13,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -20,8 +21,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
+# Wire Routes
 app.include_router(auth_router, prefix=settings.API_V1_STR)
+app.include_router(job_router, prefix=settings.API_V1_STR)
+app.include_router(exam_router, prefix=settings.API_V1_STR)
+
+
+@app.get("/", tags=["Root"])
+async def root():
+    return {
+        "success": True,
+        "service": settings.PROJECT_NAME,
+        "tagline": settings.TAGLINE,
+        "documentation": "/docs",
+        "health_check": "/health",
+    }
 
 
 @app.get("/health", tags=["Health"])
