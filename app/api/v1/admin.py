@@ -71,7 +71,6 @@ async def get_pending_jobs(db: AsyncSession = Depends(get_db)):
 
 @router.get("/organizations")
 async def list_organizations(db: AsyncSession = Depends(get_db)):
-    """Database me maujood verified organizations aur unke UUIDs dekhne ke liye"""
     result = await db.execute(select(Organization))
     orgs = result.scalars().all()
     return [
@@ -155,21 +154,21 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     now = datetime.now(timezone.utc)
     future_date = now + timedelta(days=30)
 
-    # 1. States Seed
+    # 1. State check/create
     state_res = await db.execute(select(State).where(State.code == "AI"))
     ai_state = state_res.scalar_one_or_none()
     if not ai_state:
         ai_state = State(name="All India / Central", code="AI", slug="all-india")
         db.add(ai_state)
 
-    # 2. Categories Seed
+    # 2. Category check/create
     cat_res = await db.execute(select(JobCategory).where(JobCategory.slug == "ssc"))
     ssc_cat = cat_res.scalar_one_or_none()
     if not ssc_cat:
         ssc_cat = JobCategory(name="SSC", slug="ssc", description="Staff Selection Commission")
         db.add(ssc_cat)
 
-    # 3. Organizations Seed (SSC & UPSC)
+    # 3. Organization check/create
     ssc_res = await db.execute(select(Organization).where(Organization.short_name == "SSC"))
     ssc_org = ssc_res.scalar_one_or_none()
     if not ssc_org:
@@ -194,10 +193,9 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         )
         db.add(upsc_org)
 
-    # Flush taaki DB level ID generate ho sake
     await db.flush()
 
-    # 4. Auto-create Live Published Job
+    # 4. SSC CGL Live Published Job
     job_slug = f"ssc-cgl-2026-{uuid.uuid4().hex[:6]}"
     cgl_job = Job(
         organization_id=ssc_org.id,
@@ -221,7 +219,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     db.add(cgl_job)
     await db.flush()
 
-    # 5. Job Related Links, Vacancies, Fees, Age Limit
+    # 5. Nested Links, Vacancies, Fees, Age Limit
     link1 = JobLink(
         job_id=cgl_job.id,
         title="Official Notification PDF",
