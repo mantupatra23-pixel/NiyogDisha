@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.api.v1.admin import router as admin_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.exams import router as exam_router
 from app.api.v1.jobs import router as job_router
@@ -22,11 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Wire Routers
+# Route Registry
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(job_router, prefix=settings.API_V1_STR)
 app.include_router(exam_router, prefix=settings.API_V1_STR)
 app.include_router(sources_router, prefix=settings.API_V1_STR)
+app.include_router(admin_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/", tags=["Root"])
