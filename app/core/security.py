@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from jose import JWTError, jwt
+import bcrypt
 from passlib.context import CryptContext
 from app.core.config import settings
+
+# Passlib compatibility patch for modern bcrypt versions
+if not hasattr(bcrypt, "__about__"):
+    bcrypt.__about__ = type("About", (), {"__version__": getattr(bcrypt, "__version__", "4.0.0")})()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
