@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,12 +10,18 @@ from app.api.v1.sources import router as sources_router
 from app.core.config import settings
 from app.core.database import Base, engine
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Auto-create tables if not present
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Safe Auto-create tables on startup
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Database tables verified/created successfully.")
+    except Exception as e:
+        logger.error(f"Database connection failed during startup: {e}")
     yield
 
 
