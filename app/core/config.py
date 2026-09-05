@@ -1,6 +1,6 @@
 import json
-from typing import List, Union
-from pydantic import AnyHttpUrl, PostgresDsn, field_validator
+from typing import List
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,21 +44,19 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # CORS Origins (Handles string, comma-separated, and list)
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
+    # String type rakhein taaki pydantic JSON parsing error na de
+    CORS_ORIGINS: str = "*"
 
-    @field_validator("CORS_ORIGINS", mode="before")
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        if isinstance(v, str):
-            if v.startswith("[") and v.endswith("]"):
-                try:
-                    return json.loads(v)
-                except Exception:
-                    pass
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        elif isinstance(v, list):
-            return v
-        return ["*"]
+    @property
+    def cors_origins_list(self) -> List[str]:
+        if not self.CORS_ORIGINS or self.CORS_ORIGINS == "*":
+            return ["*"]
+        if self.CORS_ORIGINS.startswith("[") and self.CORS_ORIGINS.endswith("]"):
+            try:
+                return json.loads(self.CORS_ORIGINS)
+            except Exception:
+                pass
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True, extra="ignore")
 
