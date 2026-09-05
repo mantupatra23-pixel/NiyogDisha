@@ -5,7 +5,6 @@ from app.core.database import get_db
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_token,
     hash_password,
     verify_password,
 )
@@ -25,6 +24,7 @@ async def register(user_in: UserRegisterRequest, db: AsyncSession = Depends(get_
         email=user_in.email,
         hashed_password=hash_password(user_in.password),
         full_name=user_in.full_name,
+        is_active=True,
     )
     db.add(user)
     await db.commit()

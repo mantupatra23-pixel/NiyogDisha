@@ -1,4 +1,5 @@
-from pydantic import BaseModel, EmailStr
+import uuid
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 
 class UserRegisterRequest(BaseModel):
@@ -19,10 +20,9 @@ class TokenResponse(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str
+    id: uuid.UUID
     email: EmailStr
     full_name: str
     is_active: bool
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
