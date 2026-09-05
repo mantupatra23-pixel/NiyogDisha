@@ -1,23 +1,20 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
-from jose import JWTError, jwt
 import bcrypt
-from passlib.context import CryptContext
+from jose import JWTError, jwt
 from app.core.config import settings
-
-# Passlib compatibility patch for modern bcrypt versions
-if not hasattr(bcrypt, "__about__"):
-    bcrypt.__about__ = type("About", (), {"__version__": getattr(bcrypt, "__version__", "4.0.0")})()
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    # Bcrypt standard max 72 bytes limit handle karta hai
+    pwd_bytes = password.encode("utf-8")[:72]
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    pwd_bytes = plain_password.encode("utf-8")[:72]
+    return bcrypt.checkpw(pwd_bytes, hashed_password.encode("utf-8"))
 
 
 def create_access_token(subject: str | Any, extra_claims: Optional[Dict[str, Any]] = None) -> str:
