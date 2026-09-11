@@ -11,40 +11,51 @@ from app.sources.adapters.upsc import UPSCAdapter
 
 router = APIRouter(prefix="/admin", tags=["Phase 2 Verification Engine"])
 
+
 @router.post("/sources/trigger-check/{adapter_name}")
 async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get_db)):
+    name = adapter_name.lower().strip()
     adapters = {
         "ssc": SSCAdapter(),
         "upsc": UPSCAdapter(),
     }
-    adapter = adapters.get(adapter_name.lower())
+    adapter = adapters.get(name)
     if not adapter:
-        raise HTTPException(status_code=400, detail=f"Adapter {adapter_name} not registered")
+        raise HTTPException(status_code=400, detail=f"Adapter '{adapter_name}' is not registered.")
 
     start_time = datetime.now(timezone.utc)
     try:
         items = await adapter.fetch_listing()
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
+        # Convert Pydantic items safely to dict list
+        serialized_items = [item.model_dump() for item in items]
+
         return {
             "success": True,
             "adapter": adapter_name.upper(),
-            "items_discovered": len(items),
+            "items_discovered": len(serialized_items),
             "status": "HEALTHY",
-            "duration_seconds": duration,
-            "data": items,
+            "duration_seconds": round(duration, 4),
+            "data": serialized_items,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Adapter execution failed: {str(e)}")
     finally:
         await adapter.close()
 
+
 @router.get("/review-queue")
 async def get_review_queue(db: AsyncSession = Depends(get_db)):
-    stmt = select(ExtractedRecruitment).where(ExtractedRecruitment.is_reviewed == False).order_by(ExtractedRecruitment.created_at.desc())
+    stmt = (
+        select(ExtractedRecruitment)
+        .where(ExtractedRecruitment.is_reviewed == False)
+        .order_by(ExtractedRecruitment.created_at.desc())
+    )
     res = await db.execute(stmt)
     records = res.scalars().all()
     return {"success": True, "count": len(records), "data": records}
+
 
 @router.get("/source-health")
 async def get_source_health():
@@ -53,6 +64,10 @@ async def get_source_health():
         "adapters_active": 2,
         "health_status": "HEALTHY",
         "verified_domains": [
-            "upsc.gov.in", "ssc.gov.in", "ibps.in", "rrbcdg.gov.in", "indiapostgdsonline.gov.in"
+            "upsc.gov.in",
+            "ssc.gov.in",
+            "ibps.in",
+            "rrbcdg.gov.in",
+            "indiapostgdsonline.gov.in",
         ],
     }
