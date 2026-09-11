@@ -15,13 +15,13 @@ from app.models.models import (
     JobCategory,
     JobFee,
     JobLink,
-    JobResult,
     JobStatus,
     JobVacancy,
     LinkType,
     OfficialSource,
     Organization,
     Qualification,
+    Result,
     State,
 )
 
@@ -222,7 +222,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI")
     age = JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now)
 
-    # 6. Exam Lifecycle: Admit Card, Answer Key, Result (Without status enum)
+    # 6. Exam Lifecycle: Admit Card, Answer Key, Result
     admit_card = AdmitCard(
         job_id=cgl_job.id,
         title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
@@ -236,7 +236,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         download_url="https://ssc.gov.in/answerkeys/cgl2025-tier2.pdf",
         objection_last_date=now + timedelta(days=5),
     )
-    result = JobResult(
+    result = Result(
         job_id=cgl_job.id,
         title="SSC CGL 2025 Tier-1 Final Result & Cut-off Marks",
         release_date=now,
