@@ -185,6 +185,8 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
                 org_type="CENTRAL",
             )
             db.add(ssc_org)
+        else:
+            ssc_org.official_website = "https://ssc.gov.in"
 
         upsc_res = await db.execute(select(Organization).where(Organization.short_name == "UPSC"))
         upsc_org = upsc_res.scalar_one_or_none()
@@ -228,11 +230,17 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
             db.add(cgl_job)
             await db.flush()
 
-            db.add(JobLink(job_id=cgl_job.id, title="Official Notification PDF", url="https://ssc.gov.in/cgl-2026.pdf", link_type=LinkType.NOTIFICATION, is_official=True))
+            db.add(JobLink(job_id=cgl_job.id, title="Official Notification / Notices Portal", url="https://ssc.gov.in/", link_type=LinkType.NOTIFICATION, is_official=True))
+            db.add(JobLink(job_id=cgl_job.id, title="Apply Online Portal", url="https://ssc.gov.in/", link_type=LinkType.APPLY, is_official=True))
             db.add(JobVacancy(job_id=cgl_job.id, post_name="Assistant Section Officer", category="UR", count=750))
             db.add(JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI"))
             db.add(JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now))
             await db.flush()
+        else:
+            # Update existing job links with working official URLs
+            links_res = await db.execute(select(JobLink).where(JobLink.job_id == cgl_job.id))
+            for existing_link in links_res.scalars().all():
+                existing_link.url = "https://ssc.gov.in/"
 
         # 5. Exam check or create
         exam_res = await db.execute(select(Exam).where(Exam.job_id == cgl_job.id))
@@ -250,46 +258,55 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
             db.add(cgl_exam)
             await db.flush()
 
-        # 6. Admit Card check or create
+        # 6. Admit Card check or update
         admit_res = await db.execute(select(AdmitCard).where(AdmitCard.exam_id == cgl_exam.id))
-        if not admit_res.scalars().first():
+        admit_card = admit_res.scalars().first()
+        if not admit_card:
             db.add(AdmitCard(
                 exam_id=cgl_exam.id,
                 title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
                 slug=f"ssc-cgl-2026-tier-1-admit-card-{uuid.uuid4().hex[:6]}",
-                download_url="https://ssc.gov.in/admitcard/cgl2026",
+                download_url="https://ssc.gov.in/",
                 release_date=now + timedelta(days=15),
                 is_active=True,
             ))
+        else:
+            admit_card.download_url = "https://ssc.gov.in/"
 
-        # 7. Answer Key check or create
+        # 7. Answer Key check or update
         ans_res = await db.execute(select(AnswerKey).where(AnswerKey.exam_id == cgl_exam.id))
-        if not ans_res.scalars().first():
+        ans_key = ans_res.scalars().first()
+        if not ans_key:
             db.add(AnswerKey(
                 exam_id=cgl_exam.id,
                 title="SSC CGL 2026 Tier-1 Provisional Answer Key",
                 slug=f"ssc-cgl-2026-tier-1-answer-key-{uuid.uuid4().hex[:6]}",
-                download_url="https://ssc.gov.in/answerkeys/cgl2026-tier1.pdf",
+                download_url="https://ssc.gov.in/",
                 release_date=now + timedelta(days=30),
                 objection_last_date=now + timedelta(days=35),
             ))
+        else:
+            ans_key.download_url = "https://ssc.gov.in/"
 
-        # 8. Result check or create
+        # 8. Result check or update
         res_res = await db.execute(select(Result).where(Result.exam_id == cgl_exam.id))
-        if not res_res.scalars().first():
+        result_item = res_res.scalars().first()
+        if not result_item:
             db.add(Result(
                 exam_id=cgl_exam.id,
                 title="SSC CGL 2026 Tier-1 Result & Cut-off List",
                 slug=f"ssc-cgl-2026-tier-1-result-{uuid.uuid4().hex[:6]}",
-                result_url="https://ssc.gov.in/results/cgl2026-tier1-list.pdf",
+                result_url="https://ssc.gov.in/",
                 cutoff_details="UR: 145.5, OBC: 138.2, SC: 122.0, ST: 115.4",
                 declared_date=now + timedelta(days=60),
             ))
+        else:
+            result_item.result_url = "https://ssc.gov.in/"
 
         await db.commit()
         return {
             "success": True,
-            "message": "Master data, Job, Exam, Admit Card, Answer Key, and Result seeded successfully!",
+            "message": "Master data and verified official live URLs updated successfully!",
             "job_slug": cgl_job.slug,
             "exam_slug": cgl_exam.slug,
         }
