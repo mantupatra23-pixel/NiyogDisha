@@ -10,6 +10,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.exams import router as exam_router
 from app.api.v1.jobs import router as job_router
 from app.api.v1.sources import router as sources_router
+from app.api.v1.ingestion import router as ingestion_router
 from app.core.config import settings
 from app.core.database import Base, engine
 
@@ -77,6 +78,8 @@ app.include_router(job_router, prefix=settings.API_V1_STR)
 app.include_router(exam_router, prefix=settings.API_V1_STR)
 app.include_router(sources_router, prefix=settings.API_V1_STR)
 app.include_router(admin_router, prefix=settings.API_V1_STR)
+app.include_router(ingestion_router, prefix=settings.API_V1_STR)
+
 
 
 @app.get("/", tags=["Root"])

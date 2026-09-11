@@ -1,12 +1,13 @@
 import enum
 import uuid
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -15,7 +16,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -43,6 +44,7 @@ class SourceType(str, enum.Enum):
     ANSWER_KEY = "ANSWER_KEY"
     SYLLABUS = "SYLLABUS"
     EXAM_CALENDAR = "EXAM_CALENDAR"
+    NOTICE = "NOTICE"
 
 
 class LinkType(str, enum.Enum):
@@ -53,6 +55,19 @@ class LinkType(str, enum.Enum):
     ANSWER_KEY = "ANSWER_KEY"
     RESULT = "RESULT"
     SYLLABUS = "SYLLABUS"
+
+
+class DocProcessingStatus(str, enum.Enum):
+    DISCOVERED = "DISCOVERED"
+    DOWNLOADING = "DOWNLOADING"
+    DOWNLOADED = "DOWNLOADED"
+    EXTRACTING = "EXTRACTING"
+    EXTRACTED = "EXTRACTED"
+    VALIDATING = "VALIDATING"
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    FAILED = "FAILED"
 
 
 # ==========================================
@@ -166,7 +181,7 @@ class Qualification(Base):
 
 
 # ==========================================
-# SOURCE REGISTRY
+# SOURCE REGISTRY & MONITORING
 # ==========================================
 
 class OfficialSource(Base):
@@ -187,6 +202,78 @@ class OfficialSource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped[Optional["Organization"]] = relationship("Organization", back_populates="sources")
+    source_runs: Mapped[List["SourceRun"]] = relationship("SourceRun", back_populates="source", cascade="all, delete-orphan")
+    documents: Mapped[List["IngestedDocument"]] = relationship("IngestedDocument", back_populates="source", cascade="all, delete-orphan")
+
+
+class SourceRun(Base):
+    __tablename__ = "source_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("official_sources.id", ondelete="CASCADE"), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), default="RUNNING")  # SUCCESS, FAILED, RUNNING, PARSER_ERROR
+    http_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    items_found: Mapped[int] = mapped_column(Integer, default=0)
+    new_items: Mapped[int] = mapped_column(Integer, default=0)
+    changed_items: Mapped[int] = mapped_column(Integer, default=0)
+    failed_items: Mapped[int] = mapped_column(Integer, default=0)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    source: Mapped["OfficialSource"] = relationship("OfficialSource", back_populates="source_runs")
+
+
+class IngestedDocument(Base):
+    __tablename__ = "ingested_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("official_sources.id", ondelete="CASCADE"), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    document_url: Mapped[str] = mapped_column(Text, nullable=False)
+    document_type: Mapped[str] = mapped_column(String(20), default="PDF")
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    mime_type: Mapped[str] = mapped_column(String(100), default="application/pdf")
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    sha256_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    previous_doc_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    processing_status: Mapped[str] = mapped_column(String(50), default=DocProcessingStatus.DISCOVERED.value)
+    extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ocr_applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    extraction_confidence: Mapped[str] = mapped_column(String(20), default="HIGH")  # HIGH, MEDIUM, LOW
+    downloaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    source: Mapped["OfficialSource"] = relationship("OfficialSource", back_populates="documents")
+    extracted_recruitments: Mapped[List["ExtractedRecruitment"]] = relationship("ExtractedRecruitment", back_populates="document", cascade="all, delete-orphan")
+
+
+class ExtractedRecruitment(Base):
+    __tablename__ = "extracted_recruitments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingested_documents.id", ondelete="CASCADE"), nullable=False)
+    organization_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    advertisement_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    total_vacancies: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    application_start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    application_last_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    exam_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    qualification: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    age_minimum: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    age_maximum: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    official_notification_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    official_apply_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    field_evidence: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)  # {"field": {"value": x, "confidence": "HIGH", "source_page": 1}}
+    validation_warnings: Mapped[List[str]] = mapped_column(JSON, default=list)
+    duplicate_status: Mapped[str] = mapped_column(String(50), default="UNIQUE")  # UNIQUE, EXACT_DUPLICATE, LIKELY_DUPLICATE
+    is_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    document: Mapped["IngestedDocument"] = relationship("IngestedDocument", back_populates="extracted_recruitments")
 
 
 # ==========================================
@@ -343,7 +430,7 @@ class Result(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     result_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    cutoff_details: Mapped[Optional[Text]] = mapped_column(Text)
+    cutoff_details: Mapped[Optional[str]] = mapped_column(Text)
     declared_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     exam: Mapped["Exam"] = relationship("Exam", back_populates="result")
