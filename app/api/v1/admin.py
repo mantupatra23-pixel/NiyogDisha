@@ -7,8 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.models import (
-    AdmitCard,
-    AnswerKey,
     AuditLog,
     Job,
     JobAgeLimit,
@@ -21,7 +19,6 @@ from app.models.models import (
     OfficialSource,
     Organization,
     Qualification,
-    Result,
     State,
 )
 
@@ -232,23 +229,10 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
             db.add(JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI"))
             db.add(JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now))
 
-        # 5. Populate Lifecycle items safely if missing
-        admit_exists = await db.scalar(select(func.count(AdmitCard.id)).where(AdmitCard.job_id == cgl_job.id))
-        if not admit_exists:
-            db.add(AdmitCard(job_id=cgl_job.id, title="SSC CGL 2026 Tier-1 Admit Card", release_date=now + timedelta(days=20), download_url="https://ssc.gov.in/admitcard/cgl2026"))
-
-        answer_exists = await db.scalar(select(func.count(AnswerKey.id)).where(AnswerKey.job_id == cgl_job.id))
-        if not answer_exists:
-            db.add(AnswerKey(job_id=cgl_job.id, title="SSC CGL 2025 Tier-2 Answer Key", release_date=now, download_url="https://ssc.gov.in/answerkeys/cgl2025.pdf", objection_last_date=now + timedelta(days=5)))
-
-        result_exists = await db.scalar(select(func.count(Result.id)).where(Result.job_id == cgl_job.id))
-        if not result_exists:
-            db.add(Result(job_id=cgl_job.id, title="SSC CGL 2025 Tier-1 Final Result", release_date=now, result_url="https://ssc.gov.in/results/cgl2025.pdf"))
-
         await db.commit()
         return {
             "success": True,
-            "message": "Master data and exam lifecycle items verified/seeded successfully!",
+            "message": "Master data and SSC CGL recruitment seeded successfully!",
             "job_slug": cgl_job.slug,
         }
     except Exception as e:
