@@ -157,15 +157,6 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     now = datetime.now(timezone.utc)
     future_date = now + timedelta(days=30)
 
-    # Prevent duplicate seed crash
-    existing_job = await db.scalar(select(Job).where(Job.short_title == "SSC CGL 2026"))
-    if existing_job:
-        return {
-            "success": True,
-            "message": "Master data and sample recruitment already exist in database!",
-            "job_slug": existing_job.slug,
-        }
-
     # 1. State
     state_res = await db.execute(select(State).where(State.code == "AI"))
     ai_state = state_res.scalar_one_or_none()
@@ -207,68 +198,79 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
 
     await db.flush()
 
-    # 4. SSC CGL Job
-    job_slug = f"ssc-cgl-2026-{uuid.uuid4().hex[:6]}"
-    cgl_job = Job(
-        organization_id=ssc_org.id,
-        category_id=ssc_cat.id if ssc_cat else None,
-        state_id=ai_state.id if ai_state else None,
-        title="SSC Combined Graduate Level Examination 2026",
-        short_title="SSC CGL 2026",
-        slug=job_slug,
-        advertisement_number=f"HQ-C1201/{uuid.uuid4().hex[:4].upper()}",
-        description="Staff Selection Commission invites online applications for Group B and Group C posts.",
-        status=JobStatus.PUBLISHED,
-        employment_type="PERMANENT",
-        job_type="CENTRAL",
-        application_mode="ONLINE",
-        total_vacancies=14582,
-        published_at=now,
-        last_date=future_date,
-        seo_title="SSC CGL 2026 Notification & Apply Online",
-        seo_description="Apply online for SSC CGL 2026.",
-    )
-    db.add(cgl_job)
-    await db.flush()
+    # 4. SSC CGL Job check or create
+    job_res = await db.execute(select(Job).where(Job.short_title == "SSC CGL 2026"))
+    cgl_job = job_res.scalars().first()
 
-    # 5. Nested Details
-    link1 = JobLink(
-        job_id=cgl_job.id,
-        title="Official Notification PDF",
-        url="https://ssc.gov.in/cgl-2026.pdf",
-        link_type=LinkType.NOTIFICATION,
-        is_official=True,
-    )
-    vac1 = JobVacancy(job_id=cgl_job.id, post_name="Assistant Section Officer", category="UR", count=750)
-    fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI")
-    age = JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now)
+    if not cgl_job:
+        job_slug = f"ssc-cgl-2026-{uuid.uuid4().hex[:6]}"
+        cgl_job = Job(
+            organization_id=ssc_org.id,
+            category_id=ssc_cat.id if ssc_cat else None,
+            state_id=ai_state.id if ai_state else None,
+            title="SSC Combined Graduate Level Examination 2026",
+            short_title="SSC CGL 2026",
+            slug=job_slug,
+            advertisement_number=f"HQ-C1201/{uuid.uuid4().hex[:4].upper()}",
+            description="Staff Selection Commission invites online applications for Group B and Group C posts.",
+            status=JobStatus.PUBLISHED,
+            employment_type="PERMANENT",
+            job_type="CENTRAL",
+            application_mode="ONLINE",
+            total_vacancies=14582,
+            published_at=now,
+            last_date=future_date,
+            seo_title="SSC CGL 2026 Notification & Apply Online",
+            seo_description="Apply online for SSC CGL 2026.",
+        )
+        db.add(cgl_job)
+        await db.flush()
 
-    # 6. Lifecycle Entities
-    admit_card = AdmitCard(
-        job_id=cgl_job.id,
-        title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
-        release_date=now + timedelta(days=20),
-        download_url="https://ssc.gov.in/admitcard/cgl2026",
-    )
-    answer_key = AnswerKey(
-        job_id=cgl_job.id,
-        title="SSC CGL 2025 Tier-2 Official Answer Key",
-        release_date=now,
-        download_url="https://ssc.gov.in/answerkeys/cgl2025-tier2.pdf",
-        objection_last_date=now + timedelta(days=5),
-    )
-    result = Result(
-        job_id=cgl_job.id,
-        title="SSC CGL 2025 Tier-1 Final Result & Cut-off Marks",
-        release_date=now,
-        result_url="https://ssc.gov.in/results/cgl2025-tier1-list.pdf",
-    )
+        link1 = JobLink(
+            job_id=cgl_job.id,
+            title="Official Notification PDF",
+            url="https://ssc.gov.in/cgl-2026.pdf",
+            link_type=LinkType.NOTIFICATION,
+            is_official=True,
+        )
+        vac1 = JobVacancy(job_id=cgl_job.id, post_name="Assistant Section Officer", category="UR", count=750)
+        fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI")
+        age = JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now)
+        db.add_all([link1, vac1, fee1, age])
 
-    db.add_all([link1, vac1, fee1, age, admit_card, answer_key, result])
+    # 5. Populate Lifecycle items if missing
+    admit_exists = await db.scalar(select(func.count(AdmitCard.id)).where(AdmitCard.job_id == cgl_job.id))
+    if not admit_exists:
+        db.add(AdmitCard(
+            job_id=cgl_job.id,
+            title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
+            release_date=now + timedelta(days=20),
+            download_url="https://ssc.gov.in/admitcard/cgl2026",
+        ))
+
+    answer_exists = await db.scalar(select(func.count(AnswerKey.id)).where(AnswerKey.job_id == cgl_job.id))
+    if not answer_exists:
+        db.add(AnswerKey(
+            job_id=cgl_job.id,
+            title="SSC CGL 2025 Tier-2 Official Answer Key",
+            release_date=now,
+            download_url="https://ssc.gov.in/answerkeys/cgl2025-tier2.pdf",
+            objection_last_date=now + timedelta(days=5),
+        ))
+
+    result_exists = await db.scalar(select(func.count(Result.id)).where(Result.job_id == cgl_job.id))
+    if not result_exists:
+        db.add(Result(
+            job_id=cgl_job.id,
+            title="SSC CGL 2025 Tier-1 Final Result & Cut-off Marks",
+            release_date=now,
+            result_url="https://ssc.gov.in/results/cgl2025-tier1-list.pdf",
+        ))
+
     await db.commit()
 
     return {
         "success": True,
-        "message": "Master data, SSC CGL Job, Admit Card, Answer Key, and Result seeded successfully!",
-        "job_slug": job_slug,
+        "message": "Master data and Exam Lifecycle (Admit Card, Answer Key, Result) populated successfully!",
+        "job_slug": cgl_job.slug,
     }
