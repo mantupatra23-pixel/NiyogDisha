@@ -1,13 +1,20 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.models import (
+    AuditLog,
     ExtractedRecruitment,
     IngestedDocument,
+    Job,
+    JobLink,
+    JobStatus,
+    LinkType,
     OfficialSource,
+    Organization,
     SourceRun,
     SourceType,
 )
@@ -17,6 +24,10 @@ from app.sources.adapters.upsc import UPSCAdapter
 
 router = APIRouter(prefix="/admin", tags=["Phase 2 Verification Engine"])
 
+
+# ==========================================
+# 1. TRIGGER SOURCE MONITOR & INGESTION
+# ==========================================
 
 @router.post("/sources/trigger-check/{adapter_name}")
 async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get_db)):
@@ -31,11 +42,11 @@ async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get
 
     start_time = datetime.now(timezone.utc)
     try:
-        # 1. Fetch raw notices from verified source
+        # 1. Fetch raw notice items directly from official portal
         items = await adapter.fetch_listing()
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
 
-        # 2. Get or auto-register source in official_sources
+        # 2. Get or auto-register official source in database
         source_res = await db.execute(
             select(OfficialSource).where(OfficialSource.official_domain == adapter.official_domain)
         )
@@ -60,7 +71,7 @@ async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get
             source_obj.last_success_at = datetime.now(timezone.utc)
 
         new_items_count = 0
-        persisted_records = []
+        persisted_records: List[Dict[str, Any]] = []
 
         for item in items:
             parsed = await adapter.parse(item)
@@ -68,10 +79,10 @@ async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get
             normalized = await adapter.normalize(normalized)
             is_valid = await adapter.validate(normalized)
 
-            # Compute SHA-256 fingerprint for document deduplication
+            # Compute SHA-256 fingerprint for strict document deduplication
             doc_hash = await adapter.compute_hash(f"{item.title}-{item.document_url}".encode())
 
-            # Check if document already exists
+            # Check if document fingerprint exists
             existing_doc = await db.execute(
                 select(IngestedDocument).where(IngestedDocument.sha256_hash == doc_hash)
             )
@@ -89,7 +100,7 @@ async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get
                 db.add(doc_record)
                 await db.flush()
 
-                # Push directly into Admin Review Queue
+                # Push to Admin Review Queue with exact field evidence
                 extracted_rec = ExtractedRecruitment(
                     document_id=doc_record.id,
                     organization_name=parsed.get("org_name", adapter_name.upper()),
@@ -127,6 +138,10 @@ async def trigger_source_check(adapter_name: str, db: AsyncSession = Depends(get
         await adapter.close()
 
 
+# ==========================================
+# 2. ADMIN REVIEW QUEUE & HEALTH STATUS
+# ==========================================
+
 @router.get("/review-queue")
 async def get_review_queue(db: AsyncSession = Depends(get_db)):
     stmt = (
@@ -136,8 +151,7 @@ async def get_review_queue(db: AsyncSession = Depends(get_db)):
     )
     res = await db.execute(stmt)
     records = res.scalars().all()
-    
-    # Format queue items cleanly for Admin review
+
     queue_data = [
         {
             "id": str(r.id),
@@ -171,3 +185,125 @@ async def get_source_health():
             "indiapostgdsonline.gov.in",
         ],
     }
+
+
+# ==========================================
+# 3. APPROVE, PUBLISH & REJECT ACTIONS
+# ==========================================
+
+@router.post("/review-queue/{recruitment_id}/approve-and-publish")
+async def approve_and_publish_from_queue(recruitment_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    # 1. Fetch extracted queue entry
+    stmt = select(ExtractedRecruitment).where(ExtractedRecruitment.id == recruitment_id)
+    res = await db.execute(stmt)
+    rec = res.scalar_one_or_none()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recruitment queue item not found")
+
+    if rec.is_reviewed:
+        return {"success": False, "message": "This recruitment has already been reviewed."}
+
+    # 2. Dynamic organization lookup by name or short_name
+    org_stmt = select(Organization).where(
+        (Organization.short_name.ilike(f"%{rec.organization_name}%")) |
+        (Organization.name.ilike(f"%{rec.organization_name}%"))
+    )
+    org_res = await db.execute(org_stmt)
+    org = org_res.scalars().first()
+
+    # Fallback to first existing organization if exact match isn't found
+    if not org:
+        fallback_res = await db.execute(select(Organization).limit(1))
+        org = fallback_res.scalars().first()
+
+    if not org:
+        raise HTTPException(status_code=400, detail="No organization configured. Please run seed-master-data first.")
+
+    # 3. Create published Job entity
+    now = datetime.now(timezone.utc)
+    short_slug_base = rec.advertisement_number.lower().replace("/", "-").replace(" ", "-") if rec.advertisement_number else "recruitment"
+    job_slug = f"{short_slug_base}-{uuid.uuid4().hex[:6]}"
+
+    new_job = Job(
+        organization_id=org.id,
+        title=rec.title,
+        short_title=rec.title[:140],
+        slug=job_slug,
+        advertisement_number=rec.advertisement_number or f"NOTICE/{uuid.uuid4().hex[:4].upper()}",
+        description=f"Verified recruitment notification for {rec.title} ingested directly from the official portal.",
+        status=JobStatus.PUBLISHED,
+        employment_type="PERMANENT",
+        job_type="CENTRAL",
+        application_mode="ONLINE",
+        total_vacancies=rec.total_vacancies or 0,
+        published_at=rec.application_start_date or now,
+        last_date=now + timedelta(days=30),
+        seo_title=f"{rec.title[:150]} — Official Recruitment",
+        seo_description=f"Official details, vacancies, and application links for {rec.title[:180]}.",
+    )
+    db.add(new_job)
+    await db.flush()
+
+    # 4. Attach verified official links
+    if rec.official_notification_url:
+        db.add(
+            JobLink(
+                job_id=new_job.id,
+                title="Official Notification Portal",
+                url=rec.official_notification_url,
+                link_type=LinkType.NOTIFICATION,
+                is_official=True,
+            )
+        )
+    if rec.official_apply_url:
+        db.add(
+            JobLink(
+                job_id=new_job.id,
+                title="Apply Online Portal",
+                url=rec.official_apply_url,
+                link_type=LinkType.APPLY_ONLINE,
+                is_official=True,
+            )
+        )
+
+    # 5. Mark review status and write audit log
+    rec.is_reviewed = True
+    audit = AuditLog(
+        action="APPROVE_AND_PUBLISH",
+        entity_type="JOB",
+        entity_id=str(new_job.id),
+        details=f"Approved and published from queue: Advt {rec.advertisement_number}",
+    )
+    db.add(audit)
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": "Recruitment successfully verified and published live to public portal!",
+        "job_id": str(new_job.id),
+        "job_slug": new_job.slug,
+    }
+
+
+@router.post("/review-queue/{recruitment_id}/reject")
+async def reject_from_queue(recruitment_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    stmt = select(ExtractedRecruitment).where(ExtractedRecruitment.id == recruitment_id)
+    res = await db.execute(stmt)
+    rec = res.scalar_one_or_none()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recruitment queue item not found")
+
+    rec.is_reviewed = True
+    audit = AuditLog(
+        action="REJECT_QUEUE_ITEM",
+        entity_type="EXTRACTED_RECRUITMENT",
+        entity_id=str(rec.id),
+        details=f"Rejected item: {rec.title}",
+    )
+    db.add(audit)
+    await db.commit()
+
+    return {"success": True, "message": "Queue item rejected and removed from pending queue."}
