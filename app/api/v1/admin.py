@@ -7,7 +7,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.models import (
+    AdmitCard,
+    AnswerKey,
     AuditLog,
+    Exam,
     Job,
     JobAgeLimit,
     JobCategory,
@@ -19,6 +22,7 @@ from app.models.models import (
     OfficialSource,
     Organization,
     Qualification,
+    Result,
     State,
 )
 
@@ -228,12 +232,66 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
             db.add(JobVacancy(job_id=cgl_job.id, post_name="Assistant Section Officer", category="UR", count=750))
             db.add(JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI"))
             db.add(JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now))
+            await db.flush()
+
+        # 5. Exam check or create
+        exam_res = await db.execute(select(Exam).where(Exam.job_id == cgl_job.id))
+        cgl_exam = exam_res.scalars().first()
+
+        if not cgl_exam:
+            cgl_exam = Exam(
+                job_id=cgl_job.id,
+                title="SSC CGL 2026 Tier-1 Examination",
+                slug=f"ssc-cgl-2026-tier-1-{uuid.uuid4().hex[:6]}",
+                exam_date=now + timedelta(days=25),
+                admit_card_release_date=now + timedelta(days=15),
+                result_date=now + timedelta(days=60),
+            )
+            db.add(cgl_exam)
+            await db.flush()
+
+        # 6. Admit Card check or create
+        admit_res = await db.execute(select(AdmitCard).where(AdmitCard.exam_id == cgl_exam.id))
+        if not admit_res.scalars().first():
+            db.add(AdmitCard(
+                exam_id=cgl_exam.id,
+                title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
+                slug=f"ssc-cgl-2026-tier-1-admit-card-{uuid.uuid4().hex[:6]}",
+                download_url="https://ssc.gov.in/admitcard/cgl2026",
+                release_date=now + timedelta(days=15),
+                is_active=True,
+            ))
+
+        # 7. Answer Key check or create
+        ans_res = await db.execute(select(AnswerKey).where(AnswerKey.exam_id == cgl_exam.id))
+        if not ans_res.scalars().first():
+            db.add(AnswerKey(
+                exam_id=cgl_exam.id,
+                title="SSC CGL 2026 Tier-1 Provisional Answer Key",
+                slug=f"ssc-cgl-2026-tier-1-answer-key-{uuid.uuid4().hex[:6]}",
+                download_url="https://ssc.gov.in/answerkeys/cgl2026-tier1.pdf",
+                release_date=now + timedelta(days=30),
+                objection_last_date=now + timedelta(days=35),
+            ))
+
+        # 8. Result check or create
+        res_res = await db.execute(select(Result).where(Result.exam_id == cgl_exam.id))
+        if not res_res.scalars().first():
+            db.add(Result(
+                exam_id=cgl_exam.id,
+                title="SSC CGL 2026 Tier-1 Result & Cut-off List",
+                slug=f"ssc-cgl-2026-tier-1-result-{uuid.uuid4().hex[:6]}",
+                result_url="https://ssc.gov.in/results/cgl2026-tier1-list.pdf",
+                cutoff_details="UR: 145.5, OBC: 138.2, SC: 122.0, ST: 115.4",
+                declared_date=now + timedelta(days=60),
+            ))
 
         await db.commit()
         return {
             "success": True,
-            "message": "Master data and SSC CGL recruitment seeded successfully!",
+            "message": "Master data, Job, Exam, Admit Card, Answer Key, and Result seeded successfully!",
             "job_slug": cgl_job.slug,
+            "exam_slug": cgl_exam.slug,
         }
     except Exception as e:
         await db.rollback()
