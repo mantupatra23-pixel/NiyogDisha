@@ -157,6 +157,15 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     now = datetime.now(timezone.utc)
     future_date = now + timedelta(days=30)
 
+    # Prevent duplicate seed crash
+    existing_job = await db.scalar(select(Job).where(Job.short_title == "SSC CGL 2026"))
+    if existing_job:
+        return {
+            "success": True,
+            "message": "Master data and sample recruitment already exist in database!",
+            "job_slug": existing_job.slug,
+        }
+
     # 1. State
     state_res = await db.execute(select(State).where(State.code == "AI"))
     ai_state = state_res.scalar_one_or_none()
@@ -171,7 +180,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
         ssc_cat = JobCategory(name="SSC", slug="ssc", description="Staff Selection Commission")
         db.add(ssc_cat)
 
-    # 3. Organization
+    # 3. Organizations
     ssc_res = await db.execute(select(Organization).where(Organization.short_name == "SSC"))
     ssc_org = ssc_res.scalar_one_or_none()
     if not ssc_org:
@@ -183,6 +192,18 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
             org_type="CENTRAL",
         )
         db.add(ssc_org)
+
+    upsc_res = await db.execute(select(Organization).where(Organization.short_name == "UPSC"))
+    upsc_org = upsc_res.scalar_one_or_none()
+    if not upsc_org:
+        upsc_org = Organization(
+            name="Union Public Service Commission",
+            short_name="UPSC",
+            slug="upsc",
+            official_website="https://upsc.gov.in",
+            org_type="CENTRAL",
+        )
+        db.add(upsc_org)
 
     await db.flush()
 
@@ -210,7 +231,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     db.add(cgl_job)
     await db.flush()
 
-    # 5. Nested Job Details
+    # 5. Nested Details
     link1 = JobLink(
         job_id=cgl_job.id,
         title="Official Notification PDF",
@@ -222,7 +243,7 @@ async def seed_master_data(db: AsyncSession = Depends(get_db)):
     fee1 = JobFee(job_id=cgl_job.id, category="General / OBC", amount=100.0, payment_mode="Online UPI")
     age = JobAgeLimit(job_id=cgl_job.id, min_age=18, max_age=30, as_on_date=now)
 
-    # 6. Exam Lifecycle: Admit Card, Answer Key, Result
+    # 6. Lifecycle Entities
     admit_card = AdmitCard(
         job_id=cgl_job.id,
         title="SSC CGL 2026 Tier-1 Admit Card / Hall Ticket",
