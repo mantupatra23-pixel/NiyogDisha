@@ -1,14 +1,13 @@
-import uuid
+import os
+import redis
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
-from app.models.models import OfficialSource, SourceRun, ExtractedRecruitment
+from app.models.models import OfficialSource
 from app.services.automation import AutomationService
-import redis
-import os
 
-router = APIRorgRouter = APIRouter(prefix="/admin", tags=["Phase 2.2 Automation Engine"])
+router = APIRouter(prefix="/admin", tags=["Phase 2.2 Automation Engine"])
 redis_client = redis.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 
 
@@ -29,7 +28,7 @@ async def get_scheduler_status():
 
     return {
         "scheduler_running": True,
-        "worker_running": redis_ping,
+        "worker_running": bool(redis_ping),
         "redis": "CONNECTED" if redis_ping else "FAILED",
         "queues": ["celery"],
         "active_tasks": [],
