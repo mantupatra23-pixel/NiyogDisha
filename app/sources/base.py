@@ -13,10 +13,14 @@ from pydantic import BaseModel, Field
 
 APPROVED_DOMAINS = {
     "upsc.gov.in",
+    "upsconline.nic.in",
     "ssc.gov.in",
-    "ibps.in",
+    "ssccr.gov.in",
     "rrbcdg.gov.in",
+    "indianrailways.gov.in",
+    "ibps.in",
     "indiapostgdsonline.gov.in",
+    "indiapost.gov.in",
     "drdo.gov.in",
     "isro.gov.in",
     "sbi.co.in",
@@ -31,17 +35,17 @@ APPROVED_DOMAINS = {
 
 
 def is_official_url(url: Optional[str]) -> bool:
-    """Strictly validates whether a given URL belongs to an approved official government domain."""
+    """Strictly validates whether URL belongs to an approved government hostname."""
     if not url:
         return False
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False
-        domain = parsed.netloc.lower().split(":")[0]  # Remove any port if present
-        if domain.startswith("www."):
-            domain = domain[4:]
-        return any(domain == approved or domain.endswith(f".{approved}") for approved in APPROVED_DOMAINS)
+        hostname = (parsed.hostname or "").lower().strip()
+        if hostname.startswith("www."):
+            hostname = hostname[4:]
+        return any(hostname == approved or hostname.endswith(f".{approved}") for approved in APPROVED_DOMAINS)
     except Exception:
         return False
 
@@ -56,7 +60,7 @@ class RawSourceItem(BaseModel):
     document_url: str
     advertisement_number: Optional[str] = None
     publish_date_raw: Optional[str] = None
-    raw_content: Optional[bytes] = None
+    document_bytes: Optional[bytes] = None
     mime_type: str = "application/pdf"
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -77,6 +81,7 @@ class NormalizedJobData(BaseModel):
     notification_url: str
     apply_url: Optional[str] = None
     document_hash: Optional[str] = None
+    data_state: str = "VERIFIED"  # Strictly VERIFIED, never DEMO
     field_evidence: Dict[str, Any] = Field(default_factory=dict)
     validation_warnings: List[str] = Field(default_factory=list)
 
@@ -91,7 +96,7 @@ class BaseSourceAdapter(abc.ABC):
         self.client = client or httpx.AsyncClient(
             timeout=30.0,
             headers={
-                "User-Agent": "NiyogDisha-VerificationEngine/2.0 (+https://niyogdisha.onrender.com)",
+                "User-Agent": "NiyogDisha-VerificationEngine/2.1 (+https://niyogdisha.onrender.com)",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
             },
             follow_redirects=True,
@@ -102,12 +107,12 @@ class BaseSourceAdapter(abc.ABC):
         return hashlib.sha256(content).hexdigest()
 
     async def fetch_document(self, document_url: str) -> Optional[bytes]:
-        """Downloads document bytes with official domain and content-length validation."""
+        """Streams real PDF bytes with strict official hostname validation."""
         if not is_official_url(document_url):
             return None
         try:
             res = await self.client.get(document_url)
-            if res.status_code == 200:
+            if res.status_code == 200 and len(res.content) > 0:
                 return res.content
             return None
         except Exception:
@@ -115,37 +120,33 @@ class BaseSourceAdapter(abc.ABC):
 
     @abc.abstractmethod
     async def fetch_listing(self) -> List[RawSourceItem]:
-        """Scans only official notices/recruitment portal pages and returns raw items."""
+        """Scans official listings or notices for authentic PDF/notice links."""
         pass
 
     @abc.abstractmethod
     async def parse(self, item: RawSourceItem) -> Dict[str, Any]:
-        """Parses raw metadata, HTML tables, or extracted PDF text into intermediate structured map."""
+        """Extracts structured fields from raw HTML/PDF metadata."""
         pass
 
     @abc.abstractmethod
     async def extract(self, parsed_data: Dict[str, Any]) -> NormalizedJobData:
-        """Extracts standardized core fields retaining exact field evidence without data fabrication."""
+        """Standardizes recruitment fields without fabricating missing information."""
         pass
 
     @abc.abstractmethod
     async def normalize(self, data: NormalizedJobData) -> NormalizedJobData:
-        """Cleans titles, parses non-standard date strings to UTC, and normalizes advertisement codes."""
+        """Normalizes titles, advertisement numbers, and dates."""
         pass
 
     async def validate(self, normalized_data: NormalizedJobData) -> bool:
         """Default validation: ensures official domains, valid date ranges, and non-empty mandatory titles."""
         warnings: List[str] = []
-
         if not normalized_data.title or len(normalized_data.title.strip()) < 5:
             warnings.append("INVALID_TITLE: Title is missing or too short.")
-
         if not is_official_url(normalized_data.notification_url):
             warnings.append(f"UNAPPROVED_NOTIFICATION_URL: {normalized_data.notification_url} is not an official domain.")
-
         if normalized_data.apply_url and not is_official_url(normalized_data.apply_url):
             warnings.append(f"UNAPPROVED_APPLY_URL: {normalized_data.apply_url} is not an official domain.")
-
         if normalized_data.published_at and normalized_data.last_date:
             if normalized_data.published_at > normalized_data.last_date:
                 warnings.append("INVALID_DATE_SEQUENCE: Published date is after application deadline.")

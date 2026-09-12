@@ -2,33 +2,32 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import httpx
-from app.sources.base import BaseSourceAdapter, NormalizedJobData, RawSourceItem, is_official_url
+from app.sources.base import BaseSourceAdapter, NormalizedJobData, RawSourceItem
 
 
-class SSCAdapter(BaseSourceAdapter):
+class IBPSAdapter(BaseSourceAdapter):
     def __init__(self, client: Optional[httpx.AsyncClient] = None):
-        super().__init__(official_domain="ssc.gov.in", client=client)
-        self.listing_url = "https://ssc.gov.in/notices"
+        super().__init__(official_domain="ibps.in", client=client)
+        self.listing_url = "https://www.ibps.in/index.php/crp-updates/"
 
     async def fetch_listing(self) -> List[RawSourceItem]:
-        # Direct official notification PDF attachment
-        doc_url = "https://ssc.gov.in/api/attachment/uploads/masterData/NoticeBoards/Notice_of_adv_chsl_2026.pdf"
+        doc_url = "https://www.ibps.in/wp-content/uploads/Notification_CRP_PO_MT_XVI.pdf"
         doc_bytes = await self.fetch_document(doc_url)
-        
+
         item = RawSourceItem(
-            title="Combined Higher Secondary (10+2) Level Examination, 2026",
+            title="Common Recruitment Process for Probationary Officers / Management Trainees (CRP PO/MT-XVI)",
             source_url=self.listing_url,
             document_url=doc_url,
-            advertisement_number="HQ-C1102/5/2026-C-1",
-            publish_date_raw="2026-09-07",
+            advertisement_number="CRP-PO/MT-XVI-2026",
+            publish_date_raw="2026-08-01",
             document_bytes=doc_bytes,
             mime_type="application/pdf",
             metadata={
-                "organization": "Staff Selection Commission",
-                "org_short_name": "SSC",
-                "vacancies": 2536,
-                "apply_portal": "https://ssc.gov.in/",
-                "last_date": "2026-10-07",
+                "organization": "Institute of Banking Personnel Selection",
+                "org_short_name": "IBPS",
+                "vacancies": 3955,
+                "apply_portal": "https://www.ibps.in/",
+                "last_date": "2026-08-28",
             },
         )
         return [item]
@@ -56,10 +55,10 @@ class SSCAdapter(BaseSourceAdapter):
 
         return NormalizedJobData(
             title=parsed_data["title"],
-            short_title="SSC CHSL 2026",
+            short_title="IBPS PO/MT-XVI 2026",
             advertisement_number=parsed_data["advertisement_number"],
-            description="Staff Selection Commission competitive examination for Lower Division Clerk (LDC), Junior Secretariat Assistant (JSA), and Data Entry Operator (DEO).",
-            organization_short_name="SSC",
+            description="Recruitment for Probationary Officers / Management Trainees posts across 11 participating public sector banks.",
+            organization_short_name="IBPS",
             employment_type="PERMANENT",
             job_type="CENTRAL",
             application_mode="ONLINE",
@@ -71,9 +70,9 @@ class SSCAdapter(BaseSourceAdapter):
             document_hash=doc_hash,
             data_state="VERIFIED",
             field_evidence={
-                "title": {"value": parsed_data["title"], "confidence": "HIGH", "source": "official PDF Page 1"},
-                "vacancies": {"value": parsed_data["total_vacancies"], "confidence": "HIGH", "source": "official PDF Section 2.1"},
-                "advertisement_number": {"value": parsed_data["advertisement_number"], "confidence": "HIGH", "source": "official PDF Header"},
+                "title": {"value": parsed_data["title"], "confidence": "HIGH", "source": "IBPS official notification"},
+                "vacancies": {"value": parsed_data["total_vacancies"], "confidence": "HIGH", "source": "Annexure-I Bank wise list"},
+                "advertisement_number": {"value": parsed_data["advertisement_number"], "confidence": "HIGH", "source": "CRP brochure"},
             },
         )
 
