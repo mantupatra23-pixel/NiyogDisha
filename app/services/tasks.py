@@ -3,6 +3,9 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Job, JobStatus, OfficialSource
+from app.core.celery_app import celery_app
+from app.core.database import AsyncSessionLocal
+from app.services.automation import AutomationService
 
 
 async def update_expired_jobs_task(db: AsyncSession) -> int:
@@ -41,3 +44,22 @@ async def check_official_sources_health(db: AsyncSession) -> None:
             except Exception:
                 source.last_failure_at = now
         await db.commit()
+
+
+@celery_app.task(name="app.services.tasks.run_scheduled_source_checks")
+def run_scheduled_source_checks():
+    import asyncio
+    async def check_all():
+        async with AsyncSessionLocal() as db:
+            for adapter_name in ["ssc", "upsc", "rrb", "ibps", "indiapost"]:
+                await AutomationService.execute_source_check(adapter_name, db)
+    asyncio.run(check_all())
+
+
+@celery_app.task(name="app.services.tasks.run_job_expiry")
+def run_job_expiry():
+    import asyncio
+    async def expire():
+        async with AsyncSessionLocal() as db:
+            await AutomationService.expire_published_jobs(db)
+    asyncio.run(expire())
